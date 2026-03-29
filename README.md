@@ -48,6 +48,22 @@ func main() {
 
 The `keys` and `values` slices must have equal length, and keys must be unique. After construction, the `ConstMap` is immutable. Looking up a key that was not in the original set returns an undefined value.
 
+### Verified Lookups
+
+If you need to detect missing keys, use `VerifiedConstMap`. It stores an additional fingerprint per key and returns the sentinel `NotFound` for keys not in the original set:
+
+```go
+vm, err := constmap.NewVerified(keys, values)
+if err != nil {
+	log.Fatal(err)
+}
+
+fmt.Println(vm.Map("banana")) // 200
+fmt.Println(vm.Map("grape"))  // constmap.NotFound (0xFFFFFFFFFFFFFFFF)
+```
+
+This doubles memory usage (~18 bytes/key instead of ~9) but lookup remains fast.
+
 ## Serialization
 
 A `ConstMap` can be serialized to disk and loaded back later, avoiding the cost of reconstruction. The binary format includes a FNV-1a checksum to detect corruption.
@@ -81,10 +97,11 @@ go test -v
 
 The construction time is higher (as expected for any compact data structure), but lookups are optimized for speed. I ran benchmarks on my Apple M4 Max processor to compare constmap lookups against Go's built-in `map[string]uint64`. The test uses 1 million keys.
 
-| Data Structure | Lookup Time | Memory Usage |
-|----------------|-------------|--------------|
-| ConstMap       | 7.4 ns/op |  9 bytes/key   |
-| Go Map         | 20 ns/op | 56 bytes/key    |
+| Data Structure    | Lookup Time | Memory Usage |
+|-------------------|-------------|--------------|
+| ConstMap          | 7.6 ns/op   | 9 bytes/key  |
+| VerifiedConstMap  | 13 ns/op    | 18 bytes/key |
+| Go Map            | 23 ns/op    | 56 bytes/key |
 
 ## Benchmarks
 
@@ -94,9 +111,10 @@ The benchmark suite compares `ConstMap` against Go's built-in `map[string]uint64
 go test -bench=. -benchmem
 ```
 
-There are two benchmarks:
+There are three benchmarks:
 
 - **BenchmarkConstMap** -- lookup throughput for `ConstMap.Map()`
+- **BenchmarkVerifiedConstMap** -- lookup throughput for `VerifiedConstMap.Map()`
 - **BenchmarkGoMap** -- lookup throughput for Go's built-in map
 
 For stable, reproducible results:
@@ -115,7 +133,7 @@ Run the memory comparison test to see the retained memory of each data structure
 go test -run TestMemoryUsage -v
 ```
 
-The `ConstMap` stores approximately 1.125 x *n* x 8 bytes (roughly 9 bytes per key), while Go's `map[string]uint64` typically uses around 50-60 bytes per key for keys of this size.
+The `ConstMap` stores approximately 1.125 x *n* x 8 bytes (roughly 9 bytes per key), the `VerifiedConstMap` uses twice that (~18 bytes/key), while Go's `map[string]uint64` typically uses around 50-60 bytes per key for keys of this size.
 
 ## How It Works
 

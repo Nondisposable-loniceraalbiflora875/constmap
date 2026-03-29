@@ -309,6 +309,283 @@ func (cm *ConstMap) Map(key string) uint64 {
 	return cm.data[h0] ^ cm.data[h1] ^ cm.data[h2]
 }
 
+// NotFound is the sentinel value returned by VerifiedConstMap.Map when
+// the key was not in the original set.
+const NotFound = ^uint64(0) // 0xFFFFFFFFFFFFFFFF
+
+// fingerprint derives a verification hash from the mixed hash.
+func fingerprint(hash uint64) uint64 {
+	return hash ^ (hash >> 32)
+}
+
+// VerifiedConstMap is like ConstMap but additionally stores a verification
+// fingerprint for each key. On lookup, the fingerprint is checked; if it
+// does not match, NotFound is returned. This detects (with high probability)
+// lookups of keys that were not in the original set, at the cost of doubling
+// memory usage (~18 bytes/key instead of ~9).
+type VerifiedConstMap struct {
+	seed               uint64
+	segmentLength      uint32
+	segmentLengthMask  uint32
+	segmentCount       uint32
+	segmentCountLength uint32
+	data               []uint64
+	checks             []uint64
+}
+
+func (vm *VerifiedConstMap) getHashFromHash(hash uint64) (uint32, uint32, uint32) {
+	hi, _ := bits.Mul64(hash, uint64(vm.segmentCountLength))
+	h0 := uint32(hi)
+	h1 := h0 + vm.segmentLength
+	h2 := h1 + vm.segmentLength
+	h1 ^= uint32(hash>>18) & vm.segmentLengthMask
+	h2 ^= uint32(hash) & vm.segmentLengthMask
+	return h0, h1, h2
+}
+
+// NewVerified builds a VerifiedConstMap from a set of string keys and their
+// associated uint64 values. The two slices must have equal length. Keys must
+// be unique. Values equal to NotFound (0xFFFFFFFFFFFFFFFF) are allowed but
+// cannot be distinguished from a missing key on lookup.
+func NewVerified(keys []string, values []uint64) (*VerifiedConstMap, error) {
+	if len(keys) != len(values) {
+		return nil, errors.New("constmap: keys and values must have equal length")
+	}
+	n := len(keys)
+	if n == 0 {
+		return &VerifiedConstMap{}, nil
+	}
+
+	// Hash all keys with xxhash.
+	hashed := make([]uint64, n)
+	for i, k := range keys {
+		hashed[i] = xxhash.Sum64String(k)
+	}
+
+	hashToValue := make(map[uint64]uint64, n)
+
+	size := uint32(n)
+	vm := &VerifiedConstMap{}
+
+	// Initialize parameters (same logic as ConstMap).
+	vm.segmentLength = calculateSegmentLength(size)
+	if vm.segmentLength > 262144 {
+		vm.segmentLength = 262144
+	}
+	vm.segmentLengthMask = vm.segmentLength - 1
+	cap0 := uint32(0)
+	if size > 1 {
+		sizeFactor := calculateSizeFactor(size)
+		cap0 = uint32(math.Round(float64(size) * sizeFactor))
+	}
+	totalSegmentCount := (cap0 + vm.segmentLength - 1) / vm.segmentLength
+	if totalSegmentCount < 3 {
+		totalSegmentCount = 3
+	}
+	vm.segmentCount = totalSegmentCount - 2
+	vm.segmentCountLength = vm.segmentCount * vm.segmentLength
+	arrayLen := totalSegmentCount * vm.segmentLength
+	vm.data = make([]uint64, arrayLen)
+	vm.checks = make([]uint64, arrayLen)
+
+	capacity := arrayLen
+
+	rngcounter := uint64(1)
+	vm.seed = splitmix64(&rngcounter)
+
+	alone := make([]uint32, capacity)
+	t2count := make([]uint8, capacity)
+	t2hash := make([]uint64, capacity)
+	reverseH := make([]uint8, size)
+	reverseOrder := make([]uint64, size+1)
+	reverseOrder[size] = 1
+
+	for iterations := 0; ; iterations++ {
+		if iterations > maxIterations {
+			return nil, errors.New("constmap: failed to construct map, possible duplicate keys")
+		}
+
+		if size > 4 && size < 1_000_000 {
+			switch iterations % 4 {
+			case 2:
+				vm.segmentLength /= 2
+				vm.segmentLengthMask = vm.segmentLength - 1
+				vm.segmentCount = vm.segmentCount*2 + 2
+				vm.segmentCountLength = vm.segmentCount * vm.segmentLength
+			case 3:
+				vm.segmentLength *= 2
+				vm.segmentLengthMask = vm.segmentLength - 1
+				vm.segmentCount = vm.segmentCount/2 - 1
+				vm.segmentCountLength = vm.segmentCount * vm.segmentLength
+			}
+		}
+
+		blockBits := 1
+		for (1 << blockBits) < vm.segmentCount {
+			blockBits++
+		}
+		startPos := make([]uint32, 1<<blockBits)
+		for i := range startPos {
+			startPos[i] = uint32((uint64(i) * uint64(size)) >> blockBits)
+		}
+		for _, key := range hashed {
+			hash := mixsplit(key, vm.seed)
+			segmentIndex := hash >> (64 - blockBits)
+			for reverseOrder[startPos[segmentIndex]] != 0 {
+				segmentIndex++
+				segmentIndex &= (1 << blockBits) - 1
+			}
+			reverseOrder[startPos[segmentIndex]] = hash
+			startPos[segmentIndex]++
+		}
+
+		hasError := false
+		for i := uint32(0); i < size; i++ {
+			hash := reverseOrder[i]
+			index1, index2, index3 := vm.getHashFromHash(hash)
+			t2count[index1] += 4
+			t2hash[index1] ^= hash
+			t2count[index2] += 4
+			t2count[index2] ^= 1
+			t2hash[index2] ^= hash
+			t2count[index3] += 4
+			t2count[index3] ^= 2
+			t2hash[index3] ^= hash
+
+			if t2hash[index1]&t2hash[index2]&t2hash[index3] == 0 {
+				if ((t2hash[index1] == 0) && (t2count[index1] == 8)) ||
+					((t2hash[index2] == 0) && (t2count[index2] == 8)) ||
+					((t2hash[index3] == 0) && (t2count[index3] == 8)) {
+					return nil, errors.New("constmap: duplicate key hash detected")
+				}
+			}
+			if t2count[index1] < 4 || t2count[index2] < 4 || t2count[index3] < 4 {
+				hasError = true
+			}
+		}
+		if hasError {
+			for i := uint32(0); i < size; i++ {
+				reverseOrder[i] = 0
+			}
+			for i := uint32(0); i < capacity; i++ {
+				t2count[i] = 0
+				t2hash[i] = 0
+			}
+			vm.seed = splitmix64(&rngcounter)
+			continue
+		}
+
+		Qsize := 0
+		for i := uint32(0); i < capacity; i++ {
+			alone[Qsize] = i
+			if (t2count[i] >> 2) == 1 {
+				Qsize++
+			}
+		}
+
+		stacksize := uint32(0)
+		segLen := vm.segmentLength
+		segLenToMinusSegLenX2 := segLen ^ (-(2 * segLen))
+		for Qsize > 0 {
+			Qsize--
+			index := alone[Qsize]
+			if (t2count[index] >> 2) == 1 {
+				hash := t2hash[index]
+				found := t2count[index] & 3
+				reverseH[stacksize] = found
+				reverseOrder[stacksize] = hash
+				stacksize++
+
+				h01 := uint32(hash>>18) & vm.segmentLengthMask
+				h02 := uint32(hash) & vm.segmentLengthMask
+
+				is0 := -uint32((found - 1) >> 7)
+				is1 := -uint32(found & 1)
+				is2 := -uint32(found >> 1)
+
+				otherIndex1 := index + (segLen ^ (segLenToMinusSegLenX2 & is2))
+				otherIndex2 := index - (segLen ^ (segLenToMinusSegLenX2 & is0))
+
+				otherIndex1 ^= (h01 &^ is2) ^ (h02 &^ is0)
+				otherIndex2 ^= (h01 &^ is0) ^ (h02 &^ is1)
+
+				f1 := uint8(is0&1 | is1&2)
+				f2 := uint8(is0&2 | is2&1)
+
+				alone[Qsize] = otherIndex1
+				if (t2count[otherIndex1] >> 2) == 2 {
+					Qsize++
+				}
+				t2count[otherIndex1] -= 4
+				t2count[otherIndex1] ^= f1
+				t2hash[otherIndex1] ^= hash
+
+				alone[Qsize] = otherIndex2
+				if (t2count[otherIndex2] >> 2) == 2 {
+					Qsize++
+				}
+				t2count[otherIndex2] -= 4
+				t2count[otherIndex2] ^= f2
+				t2hash[otherIndex2] ^= hash
+			}
+		}
+
+		if stacksize == size {
+			for k := range hashToValue {
+				delete(hashToValue, k)
+			}
+			for i := 0; i < n; i++ {
+				hashToValue[mixsplit(hashed[i], vm.seed)] = values[i]
+			}
+			break
+		}
+
+		for i := uint32(0); i < size; i++ {
+			reverseOrder[i] = 0
+		}
+		for i := uint32(0); i < capacity; i++ {
+			t2count[i] = 0
+			t2hash[i] = 0
+		}
+		vm.seed = splitmix64(&rngcounter)
+	}
+
+	// Assignment phase: walk the stack in reverse, assigning values and fingerprints.
+	var h012 [5]uint32
+	for i := int(size - 1); i >= 0; i-- {
+		hash := reverseOrder[i]
+		val := hashToValue[hash]
+		fp := fingerprint(hash)
+		index1, index2, index3 := vm.getHashFromHash(hash)
+		found := reverseH[i]
+		h012[0] = index1
+		h012[1] = index2
+		h012[2] = index3
+		h012[3] = h012[0]
+		h012[4] = h012[1]
+		vm.data[h012[found]] = val ^ vm.data[h012[found+1]] ^ vm.data[h012[found+2]]
+		vm.checks[h012[found]] = fp ^ vm.checks[h012[found+1]] ^ vm.checks[h012[found+2]]
+	}
+
+	return vm, nil
+}
+
+// Map returns the uint64 value associated with the given key.
+// If the key was not in the original set, NotFound is returned.
+// The false positive probability is approximately 2^{-64}.
+func (vm *VerifiedConstMap) Map(key string) uint64 {
+	if len(vm.data) == 0 {
+		return NotFound
+	}
+	hash := mixsplit(xxhash.Sum64String(key), vm.seed)
+	h0, h1, h2 := vm.getHashFromHash(hash)
+	fp := vm.checks[h0] ^ vm.checks[h1] ^ vm.checks[h2]
+	if fp != fingerprint(hash) {
+		return NotFound
+	}
+	return vm.data[h0] ^ vm.data[h1] ^ vm.data[h2]
+}
+
 // Binary format (all little-endian):
 //   [8] magic "CMAP0001"
 //   [8] seed

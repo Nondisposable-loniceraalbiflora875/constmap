@@ -91,6 +91,19 @@ func BenchmarkConstMap(b *testing.B) {
 	}
 }
 
+func BenchmarkVerifiedConstMap(b *testing.B) {
+	keys, values := makeBenchData(benchN)
+	vm, err := NewVerified(keys, values)
+	if err != nil {
+		b.Fatal(err)
+	}
+
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		vm.Map(keys[i%benchN])
+	}
+}
+
 func BenchmarkGoMap(b *testing.B) {
 	keys, values := makeBenchData(benchN)
 	m := make(map[string]uint64, benchN)
@@ -295,4 +308,106 @@ func TestSerializeEmpty(t *testing.T) {
 	if len(cm2.data) != 0 {
 		t.Errorf("expected empty data, got %d elements", len(cm2.data))
 	}
+}
+
+func TestVerifiedBasic(t *testing.T) {
+	keys := []string{"apple", "banana", "cherry", "date", "elderberry"}
+	values := []uint64{100, 200, 300, 400, 500}
+
+	vm, err := NewVerified(keys, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, k := range keys {
+		got := vm.Map(k)
+		if got != values[i] {
+			t.Errorf("Map(%q) = %d, want %d", k, got, values[i])
+		}
+	}
+}
+
+func TestVerifiedMissing(t *testing.T) {
+	keys := []string{"apple", "banana", "cherry"}
+	values := []uint64{100, 200, 300}
+
+	vm, err := NewVerified(keys, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Keys not in the set should return NotFound.
+	missing := []string{"grape", "kiwi", "mango", "pear", "plum"}
+	for _, k := range missing {
+		got := vm.Map(k)
+		if got != NotFound {
+			t.Errorf("Map(%q) = %d, want NotFound", k, got)
+		}
+	}
+}
+
+func TestVerifiedLarge(t *testing.T) {
+	n := 100000
+	keys := make([]string, n)
+	values := make([]uint64, n)
+	for i := 0; i < n; i++ {
+		keys[i] = fmt.Sprintf("key-%d", i)
+		values[i] = uint64(i * 7)
+	}
+
+	vm, err := NewVerified(keys, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	for i, k := range keys {
+		got := vm.Map(k)
+		if got != values[i] {
+			t.Errorf("Map(%q) = %d, want %d", k, got, values[i])
+		}
+	}
+
+	// Check that missing keys return NotFound.
+	for i := 0; i < 10000; i++ {
+		k := fmt.Sprintf("missing-%d", i)
+		got := vm.Map(k)
+		if got != NotFound {
+			t.Errorf("Map(%q) = %d, want NotFound", k, got)
+		}
+	}
+}
+
+func TestVerifiedEmpty(t *testing.T) {
+	vm, err := NewVerified(nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := vm.Map("anything")
+	if got != NotFound {
+		t.Errorf("empty map: Map(\"anything\") = %d, want NotFound", got)
+	}
+}
+
+func TestVerifiedMemoryUsage(t *testing.T) {
+	n := benchN
+	keys, values := makeBenchData(n)
+
+	vm, err := NewVerified(keys, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	verifiedBytes := uint64(cap(vm.data)+cap(vm.checks)) * 8
+	runtime.KeepAlive(vm)
+
+	cm, err := New(keys, values)
+	if err != nil {
+		t.Fatal(err)
+	}
+	constMapBytes := uint64(cap(cm.data)) * 8
+	runtime.KeepAlive(cm)
+
+	t.Logf("n = %d", n)
+	t.Logf("ConstMap:         %d bytes (%.1f bytes/key)", constMapBytes, float64(constMapBytes)/float64(n))
+	t.Logf("VerifiedConstMap: %d bytes (%.1f bytes/key)", verifiedBytes, float64(verifiedBytes)/float64(n))
+	t.Logf("Ratio:            VerifiedConstMap is %.1fx the size of ConstMap", float64(verifiedBytes)/float64(constMapBytes))
 }
