@@ -85,11 +85,10 @@ The benchmark suite compares `ConstMap` against Go's built-in `map[string]uint64
 go test -bench=. -benchmem
 ```
 
-There are three benchmarks:
+There are two benchmarks:
 
 - **BenchmarkConstMap** -- lookup throughput for `ConstMap.Map()`
 - **BenchmarkGoMap** -- lookup throughput for Go's built-in map
-- **BenchmarkConstMapNew** -- construction time for `ConstMap`
 
 For stable, reproducible results:
 
@@ -120,3 +119,7 @@ Given *n* key-value pairs, the algorithm:
 Lookup computes the same three positions and XORs the three array cells to recover the value. This gives O(1) lookup with minimal memory overhead.
 
 Compared to xor filters which divide the array into three equal blocks (~1.23*n* overhead), binary fuse filters use overlapping segments for better locality and a lower space overhead (~1.125*n*), and they construct faster.
+
+## License
+
+Apache License 2.0. See [LICENSE](LICENSE) for details.
