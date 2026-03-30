@@ -17,7 +17,7 @@ See also the earlier xor filter paper:
 ## Installation
 
 ```
-go get github.com/fastfilter/constmap
+go get github.com/lemire/constmap
 ```
 
 
@@ -30,7 +30,7 @@ import (
 	"fmt"
 	"log"
 
-	"github.com/fastfilter/constmap"
+	"github.com/lemire/constmap"
 )
 
 func main() {

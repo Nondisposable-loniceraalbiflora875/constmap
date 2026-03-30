@@ -1,4 +1,4 @@
-module github.com/fastfilter/constmap
+module github.com/lemire/constmap
 
 go 1.22
 
