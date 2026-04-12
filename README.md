@@ -103,6 +103,11 @@ The construction time is higher (as expected for any compact data structure), bu
 | VerifiedConstMap  | 13 ns/op    | 18 bytes/key |
 | Go Map            | 23 ns/op    | 56 bytes/key |
 
+
+The speed varies depending on your system and the size of your dataset. However,
+the memory usage should always be significantly better with `ConstMap` as long
+as you have many thousands of keys.
+
 ## Benchmarks
 
 The benchmark suite compares `ConstMap` against Go's built-in `map[string]uint64` using 1,000,000 keys. To run:
