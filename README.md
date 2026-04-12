@@ -104,9 +104,9 @@ The construction time is higher (as expected for any compact data structure), bu
 | Go Map            | 23 ns/op    | 56 bytes/key |
 
 
-The speed varies depending on your system and the size of your dataset. However,
-the memory usage should always be significantly better with `ConstMap` as long
-as you have many thousands of keys.
+The speed varies depending on your system and the size of your dataset. If it can reside in CPU cache while the map cannot, then it will be significantly faster. 
+
+The memory usage should always be significantly better with `ConstMap` as long as you have many thousands of keys.
 
 ## Benchmarks
 
