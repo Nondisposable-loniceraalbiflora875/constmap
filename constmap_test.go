@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
 
 func TestBasic(t *testing.T) {
@@ -410,4 +411,84 @@ func TestVerifiedMemoryUsage(t *testing.T) {
 	t.Logf("ConstMap:         %d bytes (%.1f bytes/key)", constMapBytes, float64(constMapBytes)/float64(n))
 	t.Logf("VerifiedConstMap: %d bytes (%.1f bytes/key)", verifiedBytes, float64(verifiedBytes)/float64(n))
 	t.Logf("Ratio:            VerifiedConstMap is %.1fx the size of ConstMap", float64(verifiedBytes)/float64(constMapBytes))
+}
+
+func measureLookupNsPerOp(iterations int, lookup func(i int)) float64 {
+	start := time.Now()
+	for i := 0; i < iterations; i++ {
+		lookup(i)
+	}
+	elapsed := time.Since(start)
+	return float64(elapsed.Nanoseconds()) / float64(iterations)
+}
+
+func measureGoMapStructBytes(keys []string, values []uint64) uint64 {
+	var before, after runtime.MemStats
+	runtime.GC()
+	runtime.ReadMemStats(&before)
+
+	m := make(map[string]uint64, len(keys))
+	for i, k := range keys {
+		m[k] = values[i]
+	}
+
+	runtime.GC()
+	runtime.ReadMemStats(&after)
+	runtime.KeepAlive(m)
+
+	if after.HeapAlloc < before.HeapAlloc {
+		return 0
+	}
+	return after.HeapAlloc - before.HeapAlloc
+}
+
+func TestLookupAndMemoryTable(t *testing.T) {
+	if os.Getenv("RUN_HEAVY_MEMORY_TESTS") != "1" {
+		t.Skip("set RUN_HEAVY_MEMORY_TESTS=1 to run this report test")
+	}
+
+	sizes := []int{10_000, 100_000, 1_000_000, 10_000_000}
+	iterations := 1_000_000
+
+	for _, n := range sizes {
+		keys, values := makeBenchData(n)
+
+		cm, err := New(keys, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		vm, err := NewVerified(keys, values)
+		if err != nil {
+			t.Fatal(err)
+		}
+		goMap := make(map[string]uint64, n)
+		for i, k := range keys {
+			goMap[k] = values[i]
+		}
+
+		constMapBytes := uint64(cap(cm.data)) * 8
+		verifiedBytes := uint64(cap(vm.data)+cap(vm.checks)) * 8
+		goMapBytes := measureGoMapStructBytes(keys, values)
+
+		constMapNs := measureLookupNsPerOp(iterations, func(i int) {
+			_ = cm.Map(keys[i%n])
+		})
+		verifiedNs := measureLookupNsPerOp(iterations, func(i int) {
+			_ = vm.Map(keys[i%n])
+		})
+		goMapNs := measureLookupNsPerOp(iterations, func(i int) {
+			_ = goMap[keys[i%n]]
+		})
+
+		runtime.KeepAlive(cm)
+		runtime.KeepAlive(vm)
+		runtime.KeepAlive(goMap)
+
+		t.Logf("n = %d keys", n)
+		t.Log("| Data Structure    | Lookup Time | Memory Usage |")
+		t.Log("|-------------------|-------------|--------------|")
+		t.Logf("| ConstMap          | %.1f ns/op  | %.1f bytes/key |", constMapNs, float64(constMapBytes)/float64(n))
+		t.Logf("| VerifiedConstMap  | %.1f ns/op  | %.1f bytes/key |", verifiedNs, float64(verifiedBytes)/float64(n))
+		t.Logf("| Go Map            | %.1f ns/op  | %.1f bytes/key |", goMapNs, float64(goMapBytes)/float64(n))
+	}
 }
